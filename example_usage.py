@@ -1,19 +1,27 @@
 """
 Example usage of the unified Agent Harness
 
-Demonstrates hot-swapping between OpenAI and Anthropic providers
-with a shared tool registry.
+Demonstrates hot-swapping, tools, streaming, error handling, and more.
 """
 
 import asyncio
+import logging
 from agent_harness import (
     AgentHarness,
     HarnessConfig,
     register_tool,
-    get_registry
+    get_registry,
+    ProviderError,
+    TimeoutError
 )
 
+# Configure logging to see structured logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
+# Register tools once - they work with both providers
 @register_tool(description="Get the current weather for a city")
 def get_weather(city: str) -> str:
     """Get weather information for a given city"""
@@ -39,45 +47,50 @@ def multiply(a: float, b: float) -> float:
 
 
 async def basic_example():
-    """Basic example: same prompt on both providers"""
+    """Basic example with context manager and hot-swapping"""
     print("=" * 60)
-    print("BASIC EXAMPLE: Hot-swapping providers")
+    print("BASIC EXAMPLE: Hot-swapping with async context manager")
     print("=" * 60 + "\n")
     
     config = HarnessConfig(
         system_prompt="You are a helpful assistant. Be concise.",
-        max_turns=5
+        max_turns=5,
+        timeout_sec=30.0
     )
-    
-    harness = AgentHarness(provider="openai", config=config)
     
     prompt = "What is 2 + 2?"
     
-    print(f"Prompt: {prompt}\n")
-    
-    print("🤖 OpenAI Response:")
-    result = await harness.run(prompt)
-    print(f"   {result.final_output}")
-    print(f"   Metadata: {result.metadata}\n")
-    
-    harness.switch_provider("claude")
-    
-    print("🤖 Claude Response:")
-    result = await harness.run(prompt)
-    print(f"   {result.final_output}")
-    print(f"   Metadata: {result.metadata}\n")
+    # Use async context manager for automatic cleanup
+    async with AgentHarness(provider="openai", config=config) as harness:
+        print(f"Prompt: {prompt}\n")
+        
+        result = await harness.run(prompt)
+        print(f"🤖 OpenAI Response: {result.final_output}")
+        print(f"   Request ID: {result.request_id}")
+        print(f"   Latency: {result.latency_ms:.2f}ms\n")
+        
+        # Hot-swap to Claude
+        await harness.switch_provider("claude")
+        
+        result = await harness.run(prompt)
+        print(f"🤖 Claude Response: {result.final_output}")
+        print(f"   Request ID: {result.request_id}")
+        print(f"   Latency: {result.latency_ms:.2f}ms\n")
 
 
 async def tool_example():
-    """Example with tools from the registry"""
+    """Example with registered tools"""
     print("=" * 60)
     print("TOOL EXAMPLE: Using registered tools")
     print("=" * 60 + "\n")
     
+    print(f"📋 Registered tools: {list(get_registry().get_all().keys())}\n")
+    
     config = HarnessConfig(
         system_prompt="You are a helpful assistant. Use tools when appropriate.",
         tool_names=["get_weather", "add", "multiply"],
-        max_turns=10
+        max_turns=10,
+        timeout_sec=30.0
     )
     
     prompts = [
@@ -85,23 +98,17 @@ async def tool_example():
         "What is 15 multiplied by 7?",
     ]
     
-    for provider in ["openai", "claude"]:
-        print(f"\n{'─' * 60}")
-        print(f"Provider: {provider.upper()}")
-        print('─' * 60)
-        
-        harness = AgentHarness(provider=provider, config=config)
-        
+    async with AgentHarness(provider="openai", config=config) as harness:
         for prompt in prompts:
-            print(f"\nPrompt: {prompt}")
+            print(f"Prompt: {prompt}")
             result = await harness.run(prompt)
-            print(f"Response: {result.final_output}")
+            print(f"Response: {result.final_output}\n")
 
 
 async def streaming_example():
     """Example with streaming responses"""
-    print("\n" + "=" * 60)
-    print("STREAMING EXAMPLE: Real-time responses")
+    print("=" * 60)
+    print("STREAMING EXAMPLE: Real-time incremental deltas")
     print("=" * 60 + "\n")
     
     config = HarnessConfig(
@@ -109,120 +116,118 @@ async def streaming_example():
         max_turns=3
     )
     
-    harness = AgentHarness(provider="openai", config=config)
-    
-    prompt = "Write a haiku about coding"
-    print(f"Prompt: {prompt}\n")
-    print("Streaming response: ", end="", flush=True)
-    
-    async for chunk in harness.stream(prompt):
-        print(chunk, end="", flush=True)
-    
-    print("\n")
+    async with AgentHarness(provider="openai", config=config) as harness:
+        prompt = "Write a haiku about coding"
+        print(f"Prompt: {prompt}\n")
+        print("Streaming: ", end="", flush=True)
+        
+        async for delta in harness.stream(prompt):
+            print(delta, end="", flush=True)
+        
+        print("\n")
 
 
 async def comparison_example():
-    """Compare both providers side-by-side"""
+    """Compare both providers side-by-side in parallel"""
     print("=" * 60)
-    print("COMPARISON EXAMPLE: Side-by-side provider comparison")
+    print("COMPARISON EXAMPLE: Parallel provider execution")
     print("=" * 60 + "\n")
     
     config = HarnessConfig(
-        system_prompt="You are a data analyst. Be concise and insightful.",
-        max_turns=5
+        system_prompt="You are a data analyst. Be concise.",
+        max_turns=5,
+        timeout_sec=30.0
     )
     
-    harness = AgentHarness(provider="openai", config=config)
-    
-    prompt = "What are the main benefits of asynchronous programming?"
+    prompt = "What are the benefits of async programming?"
     print(f"Prompt: {prompt}\n")
     
-    results = await harness.compare_providers(prompt)
-    
-    for provider, response in results.items():
-        print(f"\n{'─' * 60}")
-        print(f"{provider.upper()} Response:")
-        print('─' * 60)
-        print(response.final_output)
-        if not response.metadata.get("error"):
-            print(f"\nMetadata: {response.metadata}")
+    async with AgentHarness(provider="openai", config=config) as harness:
+        # This runs both providers in parallel
+        results = await harness.compare_providers(prompt)
+        
+        for provider, response in results.items():
+            print(f"\n{'─' * 60}")
+            print(f"{provider.upper()} Response:")
+            print('─' * 60)
+            print(response.final_output)
+            if not response.error:
+                print(f"\n📊 Latency: {response.latency_ms:.2f}ms")
 
 
-async def dynamic_tool_registration():
-    """Demonstrate dynamic tool registration"""
-    print("\n" + "=" * 60)
-    print("DYNAMIC REGISTRATION: Adding tools at runtime")
+async def error_handling_example():
+    """Example with error handling and retries"""
+    print("=" * 60)
+    print("ERROR HANDLING EXAMPLE")
     print("=" * 60 + "\n")
-    
-    @register_tool(description="Convert Celsius to Fahrenheit")
-    def celsius_to_fahrenheit(celsius: float) -> float:
-        """Convert temperature from Celsius to Fahrenheit"""
-        return (celsius * 9/5) + 32
-    
-    print(f"Registered tools: {list(get_registry().get_all().keys())}\n")
     
     config = HarnessConfig(
         system_prompt="You are a helpful assistant.",
-        tool_names=["celsius_to_fahrenheit"],
+        max_turns=2,
+        timeout_sec=0.001,  # Very short timeout to trigger error
+        retry_attempts=2
+    )
+    
+    async with AgentHarness(provider="openai", config=config) as harness:
+        try:
+            result = await harness.run("Tell me a long story")
+            print(f"Response: {result.final_output}")
+        except TimeoutError as e:
+            print(f"⏱️  Timeout Error: {e}")
+            print(f"   Provider: {e.provider}")
+            print(f"   Retryable: {e.retryable}")
+        except ProviderError as e:
+            print(f"❌ Provider Error: {e}")
+            print(f"   Provider: {e.provider}")
+
+
+async def config_override_example():
+    """Example with per-call config overrides"""
+    print("\n" + "=" * 60)
+    print("CONFIG OVERRIDE EXAMPLE")
+    print("=" * 60 + "\n")
+    
+    base_config = HarnessConfig(
+        system_prompt="You are a helpful assistant.",
+        temperature=0.7,
         max_turns=5
     )
     
-    harness = AgentHarness(provider="openai", config=config)
-    
-    prompt = "What is 25 degrees Celsius in Fahrenheit?"
-    print(f"Prompt: {prompt}")
-    
-    result = await harness.run(prompt)
-    print(f"Response: {result.final_output}\n")
-
-
-async def provider_specific_options():
-    """Example with provider-specific options"""
-    print("=" * 60)
-    print("PROVIDER-SPECIFIC OPTIONS")
-    print("=" * 60 + "\n")
-    
-    config = HarnessConfig(
-        system_prompt="You are a helpful coding assistant.",
-        max_turns=5,
-        provider_options={
-            "permission_mode": "acceptEdits",
-            "allowed_tools": ["Read", "Bash"]
-        }
-    )
-    
-    harness = AgentHarness(provider="claude", config=config)
-    
-    prompt = "What files are in the current directory?"
-    print(f"Prompt: {prompt}")
-    
-    result = await harness.run(prompt)
-    print(f"Response: {result.final_output}\n")
+    async with AgentHarness(provider="openai", config=base_config) as harness:
+        # First call with base config
+        result1 = await harness.run("Count to 3")
+        print(f"With base config (temp=0.7): {result1.final_output}\n")
+        
+        # Override for a single call
+        override = HarnessConfig(
+            temperature=0.0,  # Deterministic
+            max_turns=3
+        )
+        result2 = await harness.run("Count to 3", config_override=override)
+        print(f"With override (temp=0.0): {result2.final_output}\n")
 
 
 async def main():
     """Run all examples"""
     
-    # Show registered tools
-    print("\n📋 Registered Tools:")
-    for name, tool in get_registry().get_all().items():
-        print(f"   • {name}: {tool.description}")
-    print()
+    print("\n🚀 Agent Harness Examples\n")
     
-    # Run examples
-    await basic_example()
-    await tool_example()
-    
-    # Uncomment to run additional examples:
-    # await streaming_example()
-    # await comparison_example()
-    # await dynamic_tool_registration()
-    # await provider_specific_options()
+    try:
+        await basic_example()
+        await tool_example()
+        # await streaming_example()  # Uncomment to test
+        # await comparison_example()  # Uncomment to test
+        # await error_handling_example()  # Uncomment to test
+        # await config_override_example()  # Uncomment to test
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
     # Ensure API keys are set:
-    # export OPENAI_API_KEY="your-key-here"
-    # export ANTHROPIC_API_KEY="your-key-here"
+    # export OPENAI_API_KEY="sk-..."
+    # export ANTHROPIC_API_KEY="sk-ant-..."
     
     asyncio.run(main())

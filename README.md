@@ -1,5 +1,9 @@
 # Agent Harness - Unified OpenAI & Anthropic SDK Interface
 
+[![CI](https://github.com/haasonsaas/agent-harness/workflows/CI/badge.svg)](https://github.com/haasonsaas/agent-harness/actions)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A production-ready harness for **hot-swapping** between OpenAI Agents SDK and Anthropic Claude Agent SDK with a unified tool registry and common API.
 
 ## Key Features
@@ -7,9 +11,13 @@ A production-ready harness for **hot-swapping** between OpenAI Agents SDK and An
 ✅ **Unified Tool Registry** - Register tools once, use with any provider  
 ✅ **Hot-Swapping** - Switch providers at runtime without code changes  
 ✅ **Lazy Loading** - SDKs imported only when needed  
-✅ **Streaming Support** - Real-time response streaming for both providers  
-✅ **Provider Comparison** - Run same prompt on multiple providers  
-✅ **Type-Safe** - Full type hints and parameter extraction  
+✅ **Streaming Support** - Real-time response streaming with consistent deltas  
+✅ **Provider Comparison** - Run same prompt on multiple providers in parallel  
+✅ **Type-Safe** - Full type hints and automatic JSON Schema generation  
+✅ **Production-Ready** - Error handling, retries, timeouts, structured logging  
+✅ **Resource Management** - Async context managers and proper cleanup  
+✅ **Thread-Safe** - Concurrent tool registration and execution  
+✅ **Extensible** - Easy to add new providers  
 
 ## Architecture
 
@@ -47,11 +55,14 @@ A production-ready harness for **hot-swapping** between OpenAI Agents SDK and An
 ### 1. Installation
 
 ```bash
-# Install both SDKs
-pip install openai-agents claude-agent-sdk
+# Install with optional dependencies
+pip install -e ".[all]"  # Both providers
+pip install -e ".[openai]"  # OpenAI only
+pip install -e ".[anthropic]"  # Claude only
+pip install -e ".[dev]"  # Development tools
 
-# Or with uv
-uv add openai-agents claude-agent-sdk
+# Or install SDKs separately
+pip install openai-agents claude-agent-sdk
 ```
 
 ### 2. Set API Keys
@@ -78,22 +89,41 @@ async def main():
     config = HarnessConfig(
         system_prompt="You are a helpful assistant",
         tool_names=["get_weather"],
-        max_turns=5
+        max_turns=5,
+        timeout_sec=30.0
     )
     
-    # Start with OpenAI
-    harness = AgentHarness(provider="openai", config=config)
-    result = await harness.run("What's the weather in Tokyo?")
-    print(f"OpenAI: {result.final_output}")
-    
-    # Hot-swap to Claude
-    harness.switch_provider("claude")
-    result = await harness.run("What's the weather in Tokyo?")
-    print(f"Claude: {result.final_output}")
+    # Use async context manager for proper cleanup
+    async with AgentHarness(provider="openai", config=config) as harness:
+        result = await harness.run("What's the weather in Tokyo?")
+        print(f"OpenAI: {result.final_output}")
+        print(f"Latency: {result.latency_ms}ms")
+        
+        # Hot-swap to Claude
+        await harness.switch_provider("claude")
+        result = await harness.run("What's the weather in Tokyo?")
+        print(f"Claude: {result.final_output}")
+        print(f"Latency: {result.latency_ms}ms")
 
 
 asyncio.run(main())
 ```
+
+## What's New in v0.2.0
+
+🎉 **Major improvements for production use:**
+
+- **Automatic JSON Schema generation** from Python type hints
+- **Custom error taxonomy** with retryable errors
+- **Structured logging** with request IDs and timing
+- **Request timeouts and retry logic** with exponential backoff
+- **Async context managers** for proper resource cleanup
+- **Thread-safe registry** for concurrent operations
+- **Enhanced configuration** with validation
+- **Comprehensive test suite** with pytest
+- **CI/CD pipeline** with GitHub Actions
+
+See [CHANGELOG.md](CHANGELOG.md) for full details.
 
 ## Core Concepts
 
@@ -132,11 +162,18 @@ from agent_harness import HarnessConfig
 
 config = HarnessConfig(
     system_prompt="You are an expert data analyst",
-    model="gpt-4o",              # Provider-specific model
-    max_turns=10,                # Max conversation turns
-    temperature=0.7,             # LLM temperature
-    tool_names=["add", "multiply"],  # Specific tools to use
-    provider_options={           # Provider-specific options
+    model="gpt-4o",                   # Provider-specific model
+    max_turns=10,                     # Max conversation turns
+    temperature=0.7,                  # LLM temperature (0.0-2.0)
+    timeout_sec=30.0,                 # Request timeout
+    max_output_tokens=1000,           # Max output tokens
+    top_p=0.9,                        # Top-p sampling
+    stop_sequences=["STOP"],          # Stop sequences
+    tool_names=["add", "multiply"],   # Specific tools to use
+    retry_attempts=3,                 # Number of retries
+    retry_backoff=1.0,                # Backoff multiplier
+    request_id="custom-id",           # Custom request ID (auto-generated if None)
+    provider_options={                # Provider-specific options
         "permission_mode": "acceptEdits"  # Claude-specific
     }
 )
